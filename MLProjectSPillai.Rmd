@@ -1,0 +1,190 @@
+---
+title: "Practical Machine Learning Project"
+author: "Sentil Pillai"
+date: "December,  2014"
+output: html_document
+---
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerators on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+
+```{r init, echo=TRUE, cache=TRUE, message=FALSE}
+library("data.table"); library("doMC"); library("caret"); library("randomForest")
+
+registerDoMC(4) # setting up and using doMC for mulitcore parallel processing
+
+setwd("~/Desktop/machineLearning/Project/submit/") # set working directory
+```
+
+
+## Objectives
+
+
+The goal of the project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. 
+
+Create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. 
+
+Should also apply your machine learning algorithm to predict 20 different test cases available in the test data below.
+
+Submit your predictions in appropriate format to the programming assignment for automated grading.
+
+
+
+## Source the data
+
+
+The data and additional information for this project come from : [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har)
+
+```{r loadData1, echo=TRUE, cache=TRUE}
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+              destfile = "pml-training.csv", method="curl")
+
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+              destfile = "pml-testing.csv", method="curl")
+
+## make NA, DIV/0! and spaces as na in data frame; keep all data as non factor
+pmlTrainData <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!","")
+                         , stringsAsFactors=FALSE, header = TRUE)
+
+## naming the test csv file as validate data frame 
+pmlValidateData <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!","")
+                           , stringsAsFactors=FALSE, header = TRUE)
+```
+
+The training dataset there are 19622 records with 160 variables, and the validate/test dataset has 20 records with 160 variables.
+
+```{r loadData2, echo=TRUE, cache=TRUE}
+dim(pmlTrainData)
+dim(pmlValidateData)
+```
+
+
+## Tidy the data
+
+Set the outcome variable "classe" as factor
+```{r tidyData1, echo=TRUE, cache=TRUE}
+pmlTrainData$classe <- as.factor(pmlTrainData$classe)
+```
+
+Exclude the following seven variables (id's, time stamp, etc) as they are not measurements of accelerometer.
+```{r tidyData2, echo=TRUE, cache=TRUE}
+excludeVar = c("X","user_name","raw_timestamp_part_1","raw_timestamp_part_2"
+               ,"cvtd_timestamp","new_window","num_window")
+pmlTrainData <- pmlTrainData[,!names(pmlTrainData) %in%  excludeVar]
+dim(pmlTrainData)
+```
+
+There are a 153 predictor variables. Reducing the size of dataset by excluding 100 variables with ("NA","#DIV/0!","") NA values in them.
+```{r tidyData3, echo=TRUE, cache=TRUE}
+pmlTrainData <- pmlTrainData[,colSums(is.na(pmlTrainData))==0]
+dim(pmlTrainData)
+```
+
+Checking for "near zero variance" in the remaining predictor variables. None were found, so variables were excluded.
+```{r tidyData4, echo=TRUE, cache=TRUE}
+trainNZV <- nearZeroVar(pmlTrainData, saveMetrics = TRUE)
+if (any(trainNZV$nzv)) message("Near zero variance variables found.") else message("Near zero variance variables not found.")
+```
+
+
+Create a validate data frame, with the same predictor variables as training data set; it has one variable (classe) less than the trainData
+```{r tidyData5, echo=TRUE, cache=TRUE}
+validateData <- pmlValidateData[,names(pmlValidateData) %in% names(trainData)]
+dim(validateData)
+```
+
+Create training and testing data set by partitioning 80 %  train - 20 %  test data
+```{r tidyData6, echo=TRUE, cache=TRUE}
+set.seed(3233) # seed for random generator
+trainIndex = createDataPartition(pmlTrainData$classe,p=0.8,list=FALSE)
+trainData = pmlTrainData[trainIndex,]
+testData  = pmlTrainData[-trainIndex,]
+
+dim(trainData)
+dim(testData)
+```
+
+
+Clean up unused data frames and variables
+```{r tidyData7, echo=TRUE, cache=TRUE}
+rm(pmlTrainData); rm(pmlValidateData); rm(excludeVar); rm(trainIndex); rm(trainNZV)
+```
+
+
+## Model specification and build
+
+The correlation between the chosen 53 predictor variables are analysed. 21 correlated variables found 
+
+```{r model1, echo=TRUE, cache=TRUE}
+corRelation <- caret::findCorrelation(cor(trainData[,-53]), cutoff=0.75, verbose=FALSE)
+names(trainData)[corRelation]
+```
+
+In train control. 
+PCA pre processing option is chosen since there many variables that are correlated.
+A 5 fold cross validation is chosen to reduce out of sample errors and avoid over fitting.
+
+```{r model2, echo=TRUE, cache=TRUE}
+trC = trainControl( preProcOptions = "pca", method = "cv", number = 5 , allowParallel = TRUE)
+```
+
+
+Random forest is chosen as the prediction model, after evaluating other methods(linear SVM,  Neural Net).
+
+```{r model3, echo=TRUE, cache=TRUE}
+rf <- train(classe ~ . , data = trainData, method="rf", trControl = trC)
+save(rf, file="rfModel.Rdata")
+```
+
+Expected out of sample error estimate is 0.007 for the rf model.
+
+```{r model4, echo=TRUE, cache=TRUE}
+1 - mean(rf$resample$Accuracy)
+```
+
+Display the detail characteristics of the final model
+
+```{r model5, echo=TRUE, cache=TRUE}
+rf
+rf$finalModel
+```
+
+## Validate the results
+
+The Accuracy (0.9939) and Kappa (0.9923) is very close to 1 from the train dataset.  
+
+```{r validate1, echo=TRUE, cache=TRUE}
+## load(file="rfModel.Rdata")
+
+testPredictClasse <- predict(rf$finalModel, testData)
+
+confusionMatrix(testPredictClasse, testData$classe)
+```
+
+The final outcome of the 20 validate dataset.
+```{r validate2, echo=TRUE, cache=TRUE}
+validateResult <- predict(rf$finalModel, validateData)
+validateResult
+```
+
+## Submit the results
+
+Using the given function create the 20 files and submit it to Cousera for validation.  
+```{r submit1, echo=TRUE, cache=TRUE}
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+}
+
+pml_write_files(validateResult)
+```
+
+
+## Conclusion
+
+The outcome prediction of classe variable for the 20 rows of the provided validation dataset was 100% accurate. The random forest  predictive model provided a highly accurate results.
